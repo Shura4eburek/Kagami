@@ -13,8 +13,8 @@ import time
 
 from zeroconf import Zeroconf, ServiceInfo
 
-INSTANCE_FILTER = "MamoruScreen"      # часть имени наших сервисов
-HOST_ALIAS = "mamoru-screen.local."   # SRV-цель, резолвится только в LAN IP
+INSTANCE_FILTER = "Kagami"            # часть имени наших сервисов
+HOST_ALIAS = "kagami.local."          # SRV-цель, резолвится только в LAN IP
 ROUTER_IP = "192.168.1.1"             # для определения LAN-адреса
 
 

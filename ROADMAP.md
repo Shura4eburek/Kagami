@@ -1,4 +1,4 @@
-# MamoruScreen — план форка UxPlay
+# Kagami — план форка UxPlay
 
 ## Сделано
 - [x] Сборка UxPlay 1.74 (MSYS2 UCRT64, GStreamer, D3D12-декод)
@@ -18,7 +18,7 @@
       костыля-рефлектора: DnsServiceRegister (dnsapi.dll, Win10+) или свой
       mDNS-стек в dns_sd.c
 - [ ] **Мультисессия в одном процессе** — N клиентов без dual-bat: несколько
-      raop-инстансов, плитка окон, имена MamoruScreen-1..N
+      raop-инстансов, плитка окон, имена Kagami-1..N
 
 ### P2 — качество
 - [ ] **AirPlay 2 buffered video → настоящие 2K/4K** — БОЛЬШОЙ ЭТАП:
@@ -32,6 +32,17 @@
       Фикс: убран `-s` (дефолт и так 1920x1080). Разобраться глубже при
       работе над AirPlay 2
 
+### Android receiver (отдельная ветка, не AirPlay)
+- [ ] **Приём экрана с Android** — Android не умеет AirPlay. Пути:
+      - **Miracast** (предпочт.): Wi-Fi Direct + RTSP + H264/MPEG2-TS, близко к
+        текущему пайплайну; в Windows уже есть встроенный приёмник
+        (`ms-settings:project`). Работает на Samsung/Xiaomi/LG, но стоковый
+        Android/Pixel Miracast выпилил с Android 6
+      - **Google Cast**: проприетарный (`_googlecast._tcp`, CASTV2 protobuf),
+        реверс тяжёлый, по-хорошему нужна сертификация — почти неподъёмно
+      - ⏸ ОТЛОЖЕНО: нет Android-устройства для теста. Выбор протокола зависит
+        от модели (проверить шторку: «Трансляция»/«Smart View» = Miracast)
+
 ### P3 — продукт
 - [ ] Свой UI: трей-иконка, старт/стоп, список подключённых устройств
 - [ ] Автостарт с Windows, единый инсталлятор (uxplay + reflector + правила)
@@ -44,4 +55,4 @@ iPhone/Mac ──mDNS──> reflector.py (zeroconf @ 192.168.1.102)
 ```
 Bonjour (iTunes) сломан: анонсирует только в Tailscale (if 8), LAN не видит.
 Рефлектор снимает живые записи через `dns-sd -Z` (IPC) и переанонсирует в LAN
-с SRV-целью `mamoru-screen.local`.
+с SRV-целью `kagami.local`.
