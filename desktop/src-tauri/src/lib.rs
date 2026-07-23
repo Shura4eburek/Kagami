@@ -1,5 +1,6 @@
-use std::process::{Child, Command};
-use std::sync::Mutex;
+use std::io::{BufRead, BufReader};
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tauri::{
@@ -7,14 +8,116 @@ use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, Rect, WindowEvent,
 };
 
-/// Запущенные процессы приёмника: uxplay + mDNS-рефлектор.
+/// Состояние одной сессии (одного инстанса uxplay), из его вывода.
+#[derive(Default)]
+struct SessionState {
+    slot: i32,
+    sockets: i32,
+    name: String,
+    model: String,
+}
+
+/// Читает вывод рефлектора: ловит момент готовности анонса / ошибку.
+fn spawn_reflector_reader<R: std::io::Read + Send + 'static>(app: AppHandle, reader: R) {
+    thread::spawn(move || {
+        for line in BufReader::new(reader).lines() {
+            let Ok(line) = line else { break };
+            if line.contains("Анонс активен") {
+                let _ = app.emit("status", "ready");
+            } else if line.contains("ОШИБКА") {
+                let _ = app.emit("status", "error");
+            }
+        }
+    });
+}
+
+/// Читает поток (stdout/stderr) uxplay построчно и шлёт события в UI.
+fn spawn_log_reader<R: std::io::Read + Send + 'static>(
+    app: AppHandle,
+    sess: Arc<Mutex<SessionState>>,
+    reader: R,
+) {
+    thread::spawn(move || {
+        for line in BufReader::new(reader).lines() {
+            let Ok(line) = line else { break };
+            handle_log_line(&app, &sess, &line);
+        }
+    });
+}
+
+/// Парсит одну строку лога uxplay: готовность / подключение / закрытие сокетов.
+fn handle_log_line(app: &AppHandle, sess: &Mutex<SessionState>, line: &str) {
+    // uxplay поднял серверные сокеты — приёмник готов принимать
+    if line.contains("Initialized server socket") {
+        let _ = app.emit("status", "ready");
+        return;
+    }
+    // "connection request from NAME (MODEL) with deviceID = ID"
+    if let Some(idx) = line.find("connection request from ") {
+        let rest = &line[idx + "connection request from ".len()..];
+        if let Some(end) = rest.find(" with deviceID") {
+            let nm = rest[..end].trim();
+            let (name, model) = match nm.rfind(" (") {
+                Some(p) => (
+                    nm[..p].to_string(),
+                    nm[p + 2..].trim_end_matches(')').to_string(),
+                ),
+                None => (nm.to_string(), String::new()),
+            };
+            let slot = {
+                let mut s = match sess.lock() {
+                    Ok(s) => s,
+                    Err(_) => return,
+                };
+                s.name = name.clone();
+                s.model = model.clone();
+                s.slot
+            };
+            let _ = app.emit("status", "ready");
+            let _ = app.emit(
+                "device",
+                serde_json::json!({ "slot": slot, "connected": true, "name": name, "model": model }),
+            );
+        }
+        return;
+    }
+    // "Accepted IPv4 client on socket N" — новый сокет
+    if line.contains(" client on socket") && line.contains("Accepted ") {
+        if let Ok(mut s) = sess.lock() {
+            s.sockets += 1;
+        }
+        return;
+    }
+    // "Connection closed on socket N" — сокет закрыт; 0 сокетов = устройство ушло
+    if line.contains("Connection closed on socket") {
+        let slot = {
+            let mut s = match sess.lock() {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            s.sockets = (s.sockets - 1).max(0);
+            if s.sockets != 0 {
+                return;
+            }
+            s.name.clear();
+            s.model.clear();
+            s.slot
+        };
+        let _ = app.emit("device", serde_json::json!({ "slot": slot, "connected": false }));
+    }
+}
+
+/// Запущенные процессы приёмника: N инстансов uxplay + mDNS-рефлектор.
 #[derive(Default)]
 struct Procs {
-    uxplay: Option<Child>,
+    children: Vec<Child>,
     reflector: Option<Child>,
 }
 #[derive(Default)]
 struct Receiver(Mutex<Procs>);
+
+/// Сколько одновременных сессий (инстансов uxplay) поднимать.
+const SESSIONS: usize = 2;
 
 /// Корень репо (где build/uxplay.exe и reflector.py). Dev cwd = desktop/src-tauri.
 fn kagami_home() -> String {
@@ -29,7 +132,7 @@ fn gst_bin() -> String {
 fn start_receiver(app: AppHandle, name: String) -> Result<String, String> {
     let state = app.state::<Receiver>();
     let mut p = state.0.lock().map_err(|e| e.to_string())?;
-    if p.uxplay.is_some() {
+    if !p.children.is_empty() {
         return Ok("already running".into());
     }
     let home = kagami_home();
@@ -39,31 +142,70 @@ fn start_receiver(app: AppHandle, name: String) -> Result<String, String> {
         gst_bin(),
         std::env::var("PATH").unwrap_or_default()
     );
-    let uxplay = Command::new(format!("{home}/build/uxplay.exe"))
-        .args(["-n", &name, "-nohold", "-vsync", "no", "-fps", "60"])
-        .current_dir(&home)
-        .env("PATH", &path)
-        .spawn()
-        .map_err(|e| format!("uxplay не запустился: {e}"))?;
-    p.uxplay = Some(uxplay);
+    // N инстансов: разные имена, второй+ с уникальным MAC (-m), чтобы не конфликтовали.
+    for slot in 0..SESSIONS {
+        let iname = if slot == 0 {
+            name.clone()
+        } else {
+            format!("{name} {}", slot + 1)
+        };
+        let mut cmd = Command::new(format!("{home}/build/uxplay.exe"));
+        cmd.args(["-n", &iname, "-nohold", "-vsync", "no", "-fps", "60"]);
+        if slot > 0 {
+            cmd.arg("-m");
+        }
+        let mut child = cmd
+            .current_dir(&home)
+            .env("PATH", &path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("uxplay #{} не запустился: {e}", slot + 1))?;
+
+        let sess = Arc::new(Mutex::new(SessionState {
+            slot: slot as i32,
+            ..Default::default()
+        }));
+        if let Some(out) = child.stdout.take() {
+            spawn_log_reader(app.clone(), sess.clone(), out);
+        }
+        if let Some(err) = child.stderr.take() {
+            spawn_log_reader(app.clone(), sess.clone(), err);
+        }
+        p.children.push(child);
+    }
     drop(p);
+    let _ = app.emit("status", "starting");
 
     // Рефлектор — после паузы, чтобы uxplay успел анонсировать сервисы.
     let app2 = app.clone();
     thread::spawn(move || {
-        thread::sleep(Duration::from_secs(5));
+        thread::sleep(Duration::from_secs(3));
         let st = app2.state::<Receiver>();
         let Ok(mut p) = st.0.lock() else { return };
-        if p.uxplay.is_none() {
+        if p.children.is_empty() {
             return; // приёмник уже остановили
         }
-        match Command::new("py")
+        let spawned = Command::new("py")
             .args(["-3.13", "-u", "reflector.py"])
             .current_dir(kagami_home())
-            .spawn()
-        {
-            Ok(c) => p.reflector = Some(c),
-            Err(e) => eprintln!("[kagami] reflector не запустился: {e}"),
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn();
+        match spawned {
+            Ok(mut c) => {
+                if let Some(out) = c.stdout.take() {
+                    spawn_reflector_reader(app2.clone(), out);
+                }
+                if let Some(err) = c.stderr.take() {
+                    spawn_reflector_reader(app2.clone(), err);
+                }
+                p.reflector = Some(c);
+            }
+            Err(e) => {
+                eprintln!("[kagami] reflector не запустился: {e}");
+                let _ = app2.emit("status", "error");
+            }
         }
     });
 
@@ -77,11 +219,13 @@ fn stop_receiver(app: AppHandle) -> Result<String, String> {
     if let Some(mut r) = p.reflector.take() {
         let _ = r.kill();
     }
-    if let Some(mut u) = p.uxplay.take() {
-        let _ = u.kill();
-        return Ok("stopped".into());
+    if p.children.is_empty() {
+        return Ok("not running".into());
     }
-    Ok("not running".into())
+    for mut c in p.children.drain(..) {
+        let _ = c.kill();
+    }
+    Ok("stopped".into())
 }
 
 #[tauri::command]
@@ -89,7 +233,7 @@ fn receiver_status(app: AppHandle) -> bool {
     app.state::<Receiver>()
         .0
         .lock()
-        .map(|p| p.uxplay.is_some())
+        .map(|p| !p.children.is_empty())
         .unwrap_or(false)
 }
 
@@ -117,8 +261,8 @@ fn quit_app(app: AppHandle) {
             if let Some(mut r) = p.reflector.take() {
                 let _ = r.kill();
             }
-            if let Some(mut u) = p.uxplay.take() {
-                let _ = u.kill();
+            for mut c in p.children.drain(..) {
+                let _ = c.kill();
             }
         }
     }

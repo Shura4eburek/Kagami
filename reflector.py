@@ -32,7 +32,7 @@ def snapshot(service_type: str) -> str:
         ["dns-sd", "-Z", service_type, "local."],
         stdout=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
     )
-    time.sleep(4)
+    time.sleep(2.5)
     p.kill()
     return p.stdout.read()
 
