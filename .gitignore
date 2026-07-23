@@ -1,2 +1,4 @@
 build/
 .vscode/
+# MamoruScreen runtime logs
+*.log
