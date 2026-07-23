@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kagami tray</title>
+    <style>
+      :root{
+        color-scheme: dark;
+        --ink:#f5f5f7; --ink-3:#8e8e93; --ink-4:#636366;
+        --blue:#0a84ff; --green:#30d158; --red:#ff453a;
+        --hair:rgba(255,255,255,.09); --hair-strong:rgba(255,255,255,.14);
+        --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+      }
+      *{box-sizing:border-box}
+      html,body{margin:0;height:100%;background:transparent}
+      body{font-family:var(--font);color:var(--ink);-webkit-font-smoothing:antialiased;
+        user-select:none;padding:0;overflow:hidden}
+      .tray{
+        border-radius:13px;overflow:hidden;
+        background:rgba(38,38,41,.96);
+        border:1px solid var(--hair-strong);
+        padding-bottom:6px;
+      }
+      .tray-head{display:flex;align-items:center;gap:10px;padding:12px 14px 10px}
+      .g{width:26px;height:26px;border-radius:7px;flex:0 0 auto;display:grid;place-items:center;
+        background:linear-gradient(155deg,#5ea0ff,#0a84ff 55%,#0060df);
+        box-shadow:inset 0 1px 0 rgba(255,255,255,.4)}
+      .g::before{content:"";width:11px;height:11px;border-radius:50%;
+        background:linear-gradient(160deg,#fff,rgba(255,255,255,.3))}
+      .tn{font-size:14px;font-weight:600}
+      .ts{font-size:11px;color:var(--ink-3);margin-top:1px;font-variant-numeric:tabular-nums}
+      .tsep{height:1px;background:var(--hair);margin:6px 10px}
+      .tlabel{font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;
+        color:var(--ink-4);padding:4px 14px 3px}
+      .mi{display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:13px;color:var(--ink);cursor:default}
+      button.mi{width:calc(100% - 0px);border:0;background:transparent;font:inherit;text-align:left;color:var(--ink)}
+      .mi:hover{background:var(--blue);color:#fff;border-radius:7px;margin:0 5px;padding:7px 9px}
+      .mi:hover .k,.mi:hover .mm{color:rgba(255,255,255,.78)}
+      .mi .ci{width:16px;text-align:center;color:var(--ink-3);font-size:12px}
+      .mi:hover .ci{color:#fff}
+      .mi .lbl{flex:1}
+      .mi .k{color:var(--ink-4);font-size:12px}
+      .mi .mm{color:var(--ink-4);font-size:11px}
+      .mi .sd{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px rgba(48,209,88,.6)}
+      button.mi.quit:hover{background:var(--red)}
+      @media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+    </style>
+  </head>
+  <body>
+    <div class="tray">
+      <div class="tray-head">
+        <span class="g"></span>
+        <div>
+          <div class="tn">Kagami</div>
+          <div class="ts" id="ts">Готов · 192.168.1.102</div>
+        </div>
+      </div>
+      <div class="tsep"></div>
+      <div class="tlabel">Подключено</div>
+      <div class="mi"><span class="sd"></span><span class="lbl">iPhone 15 Pro</span><span class="mm">1080p60</span></div>
+      <div class="mi"><span class="sd"></span><span class="lbl">MacBook Pro</span><span class="mm">1080p60</span></div>
+      <div class="tsep"></div>
+      <button class="mi" id="open"><span class="ci">⧉</span><span class="lbl">Открыть Kagami</span></button>
+      <button class="mi" id="settings"><span class="ci">⚙</span><span class="lbl">Настройки…</span></button>
+      <div class="tsep"></div>
+      <button class="mi quit" id="quit"><span class="ci">⏻</span><span class="lbl">Выйти из Kagami</span></button>
+    </div>
+
+    <script>
+      const { invoke } = window.__TAURI__.core;
+      document.getElementById("open").addEventListener("click", () => invoke("open_main"));
+      document.getElementById("settings").addEventListener("click", () => invoke("open_settings"));
+      document.getElementById("quit").addEventListener("click", () => invoke("quit_app"));
+    </script>
+  </body>
+</html>
